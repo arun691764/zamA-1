@@ -1,96 +1,131 @@
-from PIL import Image, ImageDraw, ImageFont
 import requests
 from bs4 import BeautifulSoup
-import textwrap
+from PIL import Image, ImageDraw, ImageFont
 import os
 import subprocess
+import random
 
-BLOG_URL = "https://www.zama.org/blog"
+BLOG_URL = "https://www.zama.ai/blog"
+LOGO_PATH = "logo.png"
+OUTPUT_VIDEO = "zama_final.mp4"
+HANDLE = "@AmitKum955"
 
+# ---------------------------
+# Fetch blog text
+# ---------------------------
 def fetch_blog():
-    print(f"Fetching: {BLOG_URL}")
-    r = requests.get(BLOG_URL)
+    r = requests.get(BLOG_URL, timeout=10)
     soup = BeautifulSoup(r.text, "html.parser")
+    paragraphs = soup.find_all("p")
+    text_blocks = [p.text.strip() for p in paragraphs if len(p.text.strip()) > 50]
+    return text_blocks[:10]
 
-    blocks = soup.find_all(["h1", "h2", "p"])
-    content = []
+# ---------------------------
+# Create slide images
+# ---------------------------
+def create_slides(text_blocks):
+    slides = []
+    font_title = ImageFont.truetype("DejaVuSans.ttf", 48)
+    font_body = ImageFont.truetype("DejaVuSans.ttf", 36)
+    font_handle = ImageFont.truetype("DejaVuSans.ttf", 32)
 
-    for b in blocks:
-        text = b.get_text().strip()
-        if len(text) > 5:
-            content.append(text)
+    for i, block in enumerate(text_blocks):
+        img = Image.new("RGB", (1280, 720), (15, 15, 15))
+        draw = ImageDraw.Draw(img)
 
-    print(f"Extracted {len(content)} blocks.")
-    return content[:9]
+        # Logo
+        if os.path.exists(LOGO_PATH):
+            logo = Image.open(LOGO_PATH).resize((140, 140))
+            img.paste(logo, (1100, 20))
 
-def create_slide(text, slide_no, logo_path):
-    W, H = 1280, 720
-    img = Image.new("RGB", (W, H), (12, 12, 12))
-    draw = ImageDraw.Draw(img)
+        draw.text((50, 40), f"Zama — Season 4", font=font_title, fill=(255, 255, 0))
 
-    title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 55)
-    body_font = ImageFont.truetype("DejaVuSans.ttf", 40)
+        y = 140
+        for line in block.split(". "):
+            draw.text((50, y), line.strip(), font=font_body, fill=(255,255,255))
+            y += 60
 
-    # Wrap text
-    wrapper = textwrap.TextWrapper(width=30)
-    lines = wrapper.wrap(text=text)
+        # Moving X-handle
+        xpos = random.randint(50, 900)
+        ypos = random.randint(600, 660)
+        draw.text((xpos, ypos), f"Created by: {HANDLE}", font=font_handle, fill=(0,255,255))
 
-    # Draw text
-    y = 170
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=body_font)
-        w = bbox[2] - bbox[0]
+        fname = f"slide_{i}.png"
+        img.save(fname)
+        slides.append(fname)
 
-        draw.text(((W - w) / 2, y), line, fill="white", font=body_font)
-        y += 60
+    return slides
 
-    # Slide number bottom-right
-    draw.text((1150, 650), f"{slide_no}", fill="white", font=body_font)
+# ---------------------------
+# Generate audio WITHOUT API
+# ---------------------------
+def generate_audio(text_blocks):
+    full_text = ". ".join(text_blocks)
+    with open("tts.txt", "w") as f:
+        f.write(full_text)
 
-    # Logo top-right
-    logo = Image.open(logo_path).resize((140, 140))
-    img.paste(logo, (W - 170, 20), mask=logo.convert("RGBA"))
+    cmd = [
+        "ffmpeg",
+        "-f", "lavfi",
+        "-i", "sine=frequency=0:duration=0.1",  # dummy input
+        "-f", "lavfi",
+        "-i", "aresample=async=1",
+        "-f", "lavfi",
+        "-i", "anoisesrc=d=0.1",
+        "-filter_complex",
+        f"flite=textfile='tts.txt':voice='kal16',volume=1.5",
+        "voice.wav",
+        "-y",
+    ]
+    subprocess.run(cmd)
 
-    out = f"slide_{slide_no}.png"
-    img.save(out)
-    return out
+    # Improve clarity
+    cmd2 = [
+        "ffmpeg", "-i", "voice.wav",
+        "-af", "highpass=f=150,lowpass=f=5000,volume=1.3",
+        "voice_fixed.wav",
+        "-y"
+    ]
+    subprocess.run(cmd2)
 
-def text_to_audio(lines):
-    txt = " ".join(lines)
-    with open("voice.txt", "w") as f:
-        f.write(txt)
-
-    os.system("espeak -f voice.txt -w voice.wav --stdout | ffmpeg -i - -af 'volume=1.3,highpass=120,lowpass=6500,dynaudnorm' voice_fixed.wav")
-
-def generate_video():
-    slides = sorted([f for f in os.listdir() if f.startswith("slide_") and f.endswith(".png")])
-
+# ---------------------------
+# Combine into final video
+# ---------------------------
+def combine(slides):
     with open("slides.txt", "w") as f:
         for s in slides:
-            f.write(f"file {s}\n")
-            f.write("duration 2.5\n")
+            f.write(f"file '{s}'\n")
+            f.write("duration 3\n")
 
-    cmd = (
-        "ffmpeg -y -f concat -safe 0 -i slides.txt -i voice_fixed.wav "
-        "-vf scale=1280:720 -preset veryfast -shortest zama_final.mp4"
-    )
-    os.system(cmd)
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", "slides.txt",
+        "-i", "voice_fixed.wav",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        OUTPUT_VIDEO
+    ]
+    subprocess.run(cmd)
 
+# ---------------------------
+# Main
+# ---------------------------
 def main():
-    if not os.path.exists("logo.png"):
-        print("ERROR: logo.png missing")
-        exit(1)
-
+    print("Fetching blog text...")
     blocks = fetch_blog()
-    slides = []
 
-    for i, t in enumerate(blocks):
-        sfile = create_slide(t, i + 1, "logo.png")
-        slides.append(sfile)
+    print("Creating slides...")
+    slides = create_slides(blocks)
 
-    text_to_audio(blocks)
-    generate_video()
-    print("Video Generated!")
+    print("Generating audio...")
+    generate_audio(blocks)
+
+    print("Combining final video...")
+    combine(slides)
+
+    print("VIDEO READY:", OUTPUT_VIDEO)
 
 if __name__ == "__main__":
     main()
