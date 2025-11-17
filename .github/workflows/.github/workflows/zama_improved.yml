@@ -1,0 +1,29 @@
+name: Zama Improved Video
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg & Fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+
+      - name: Install Python packages
+        run: pip install -r requirements.txt
+
+      - name: Generate Video
+        run: python zama_video_improved.py
+
+      - name: Upload Video
+        uses: actions/upload-artifact@v4
+        with:
+          name: zama-final-video
+          path: zama_final.mp4
